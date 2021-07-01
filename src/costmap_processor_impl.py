@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 
+# system imports
+import signal
+import sys
+import threading
+
 # ros imports
 import rospy
 from occupancy_grid_python import OccupancyGridManager
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point32
-
 from costmap_processor.msg import Contour as ContourMsg
 
 # image processing imports
@@ -14,43 +18,13 @@ import cv2 as cv
 from PIL import Image as im
 from matplotlib import pyplot as plt
 
-# system imports
-import signal, sys
-import threading
-
-class Point2D(object):
-
-    def __init__(self, x, y, value=0):
-        self._x = x
-        self._y = y
-        self._value = value
-    
-    def __str__(self):
-        return "Point: ({}, {}) \nValue: {}".format(self.x, self.y, self.value)
-
-    @property
-    def x(self):
-        return self._x
-
-    @property
-    def y(self):
-        return self._y
-
-    @property
-    def value(self):
-        return self._value
-
-    @value.setter
-    def value(self, new_value):
-        self._value = new_value
 
 class Contour(object):
 
     def __init__(self, label, center, points, pose_rel_to_base=(0,0)):
         self._label = str(label)
         self._center = center
-        # TODO: change _points to _points
-        self._points = points     
+        self._points = points
         self._pose_rel_to_base = pose_rel_to_base
 
     def __str__(self):
@@ -95,6 +69,7 @@ class Contour(object):
 def ctrl_c_handler(sig, frame):
     sys.exit(0)
 
+
 class CostmapProcessor(threading.Thread):
 
     def __init__(self, source_type, ogm, stop, publish=False):
@@ -134,11 +109,14 @@ class CostmapProcessor(threading.Thread):
     # runs at thread start
     def run(self):
 
+        ''' main loop of thread, checks for costmap updates, then processes them and publishes Contour messages '''
+
         # TODO: should be param-ed
         rate = rospy.Rate(1)    # loop frequency (Hz)
 
         if self.publish:
 
+            # name output topic with last part of input topic
             prefix = '/costmap_processor/'
             topic = self.ogm.topic.split("/")[-1]  # last string in /../../...
             pub_name = prefix + topic
@@ -155,7 +133,7 @@ class CostmapProcessor(threading.Thread):
 
                 # get new contours of things in our FOV
                 # if self.source_type == 'heightmap':
-                new_contours = self.get_height_contours()
+                new_contours = self.get_grid_contours()
 
                 # convert points in new_contours to "real" X,Y coords in meters
                 self.contours = self.get_frame_coords(new_contours)
@@ -169,6 +147,8 @@ class CostmapProcessor(threading.Thread):
             rate.sleep()
 
     def print_ogm_info(self):
+
+        ''' prints basic info about the costmap messages being recieved by the OGM '''
 
         print('costmap topic: {0}'.format(self.ogm.topic))
 
@@ -184,7 +164,9 @@ class CostmapProcessor(threading.Thread):
 
         print('----------------------')
 
-    def get_height_contours(self):
+    def get_grid_contours(self):
+        
+        ''' extracts image contours from grid_data in OGM, then convert to list of Contour objects '''
 
         # convert negative values (-1 == UNKNOWN) to zero
         pos_grid = np.where(self.ogm._grid_data == -1, 0, self.ogm._grid_data)
@@ -201,7 +183,7 @@ class CostmapProcessor(threading.Thread):
             grid_img = np.where(np.logical_and(grid_img >= heights[idx], grid_img < heights[idx+1]),
                 heights[idx], grid_img)
         
-        contours = []
+        contours = []       # returned
         region_grids = {}
 
         # get (sorted) list of unique values, will contain a value for each height "region" in the image
@@ -246,23 +228,22 @@ class CostmapProcessor(threading.Thread):
                 else:
                     continue
 
-                # draw the center of the contour
-                cv.circle(img2, (cX, cY), 1, (0, 0, 255), -1)
+                # # draw the center of the contour
+                # cv.circle(img2, (cX, cY), 1, (0, 0, 255), -1)
 
-                rect = cv.minAreaRect(cnt)
-                box = cv.boxPoints(rect)
-                box = np.int0(box)  # ???
-                cv.drawContours(img2,[box],0,(0,0,255),2)
+                # rect = cv.minAreaRect(cnt)
+                # box = cv.boxPoints(rect)
+                # box = np.int0(box)  # ???
+                # cv.drawContours(img2,[box],0,(0,0,255),2)
 
-                # convert to list of Point2D 
-                
+                # convert to list of tuple points (x,y)
                 cnt_points = self.contour_to_points(cnt)
 
-                contour = Contour(label=region, center=Point2D(cX, cY, region), points=cnt_points)
+                # create Contour object and add it to list of contours (to be returned)
+                contour = Contour(label=region, center=(cX, cY), points=cnt_points)
                 contour.label = region
                 contour.pose_rel_to_base = self.ogm.get_world_x_y(contour.center.x, contour.center.y)
                 contours.append(contour)
-
 
             # plt.subplot(131),plt.imshow(grid_img,cmap = 'gray')
             # plt.title('Original'), plt.xticks([]), plt.yticks([])
@@ -280,29 +261,29 @@ class CostmapProcessor(threading.Thread):
 
     def contour_to_contour_msg(self, contour):
 
+        ''' takes a Contour object and creates a Contour ROS message for publishing '''
+
+        # create message to be published
         msg = ContourMsg()
 
+        # fill header fields
         msg.contour.header.stamp = rospy.Time.now()
         msg.contour.header.frame_id = self.ogm.reference_frame
 
-        # print(contour.points)
-
+        # add points in the contour to message contour.polygon.points
         for idx in range(0, len(contour.points)-1):
 
+            # Point32 message
             point = Point32()
             point.x = contour.points[idx][0]
             point.y = contour.points[idx][1]
             point.z = 0.0
 
-            # msg.contour.polygon.points[idx].x = contour.points[idx][0]
-            # msg.contour.polygon.points[idx].y = contour.points[idx][1]
-            # msg.contour.polygon.points[idx].z = 0.0
-
             msg.contour.polygon.points.append(point)
 
         # fill the pose
         msg.pose.position.x = contour.pose_rel_to_base[0]
-        msg.pose.position.y = contour.pose_rel_to_base[1] 
+        msg.pose.position.y = contour.pose_rel_to_base[1]
         msg.pose.position.z = 0 # no contours in the air
 
         # don't really care about this
@@ -311,66 +292,49 @@ class CostmapProcessor(threading.Thread):
         msg.pose.orientation.z = 0
         msg.pose.orientation.w = 1
 
+        # label the contour
         msg.label.data = contour.label
 
         return msg
 
 
-    # taks np.ndarray created by np.findContours() and returns list of tuple points
-    # TODO: doing this with a loop is hella stupid
     def contour_to_points(self, contour):
 
-        points = []
-
-        # convert to 2D array of points
+        ''' taks np.ndarray created by np.findContours() and returns list of tuple points '''
+        
+        # reshape to 2D array of points
         contour = np.reshape(contour, (contour.shape[0], 2))
 
+        # convert to float (from int)
         contour = contour.astype('float32')
 
         # list() -> numpy scalars
         # toList() -> closest compatible python type, e.g. float
-        points = contour.tolist()
+        return contour.tolist()
 
-        # for idx in range(0, contour.shape[0]):
-        #     points.append((contour[idx][0][0], contour[idx][0][1]))
-
-        return points
-
+    # TODO: implement this, dork
     def remove_duplicates(self, contours, region_grids):
+
+        ''' checks for and removes overlapping contours (which represent the same region of space) '''
         
         return contours # modified
 
-    # converts pixel coords into "real-world" coords
-    # based on reference frame of costmap
     def get_frame_coords(self, contours):
 
-        # TODO: can I just reshape the entire contours array rather than loop through for performance?
-        # thought: reshape may not be necessary, or desirable for either loop
-        # for contour in contours:
+        ''' converts costmap pixel coordinates to "real-world" coordinates in the reference frame '''
 
-        #     # change data type to from int to float
-        #     # contour.points = contour.points.astype('float32')
-
-        #     # convert each point in the contour to real-world equiv.
-        #     for idx in range(0, contour.points.shape[0]):
-                
-        #         costmap_point = (contour.points[idx][0][0], contour.points[idx][0][1])
-        #         world_point = self.ogm.get_world_x_y(costmap_point[0], costmap_point[1])
-
-        #         contour.points[idx][0][0] = world_point[0]
-        #         contour.points[idx][0][1] = world_point[1]
-
+        # loop through contour list
         for contour in contours:
-
+            # convert each point in the contour to a point in the world/reference frame
             for point in contour.points:
 
                 world_point = self.ogm.get_world_x_y(point[0], point[1])
                 point[0], point[1] = world_point
 
-
-        return contours        
+        return contours
 
 def configure_params():
+
     ''' configure OccupancyGridManagers from loaded YAML config files
         returns list of configured OGMs and list of types (if YAML exists)
         else, returns None
@@ -381,6 +345,7 @@ def configure_params():
     managers = []
     source_types = []
 
+    # check for required 'sources' param
     if rospy.has_param('~costmap_processor/sources'):
 
         sources = rospy.get_param('~costmap_processor/sources').split()
@@ -411,7 +376,6 @@ def configure_params():
             managers.append(_ogm)
 
         return managers, source_types
-
     else:
         rospy.logwarn('parameter \'sources\' not configured in YAML, OccupancyGridManager must be configured by hand')
         return None
