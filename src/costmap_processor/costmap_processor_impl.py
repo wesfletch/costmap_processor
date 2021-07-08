@@ -28,7 +28,7 @@ class Contour(object):
         self._pose_rel_to_base = pose_rel_to_base
 
     def __str__(self):
-        return "label: {}\ncenter: {}\npose: {}\ndata: {}".format(self.label, self.center, self.pose_rel_to_base, self._points)
+        return "label: {}\ncenter: {}\npose: {}\ndata: {}".format(self._label, self._center, self._pose_rel_to_base, self._points)
 
     @property
     def label(self):
@@ -66,13 +66,14 @@ class Contour(object):
         # https://en.wikipedia.org/wiki/Shoelace_formula
         pass
 
+
 def ctrl_c_handler(sig, frame):
     sys.exit(0)
 
 
 class CostmapProcessor(threading.Thread):
 
-    def __init__(self, source_type, ogm, stop, publish=False):
+    def __init__(self, source_type, ogm, stop, publish=True):
       threading.Thread.__init__(self)
       self._source_type = source_type
       self._ogm = ogm
@@ -114,33 +115,33 @@ class CostmapProcessor(threading.Thread):
         # TODO: should be param-ed
         rate = rospy.Rate(1)    # loop frequency (Hz)
 
-        if self.publish:
+        if self._publish:
 
             # name output topic with last part of input topic
             prefix = '/costmap_processor/'
-            topic = self.ogm.topic.split("/")[-1]  # last string in /../../...
+            topic = self._ogm.topic.split("/")[-1]  # last string in /../../...
             pub_name = prefix + topic
 
             contour_pub = rospy.Publisher(pub_name, ContourMsg, queue_size=10 )
 
         while not self.stop:
 
-            # if we received either a full or partial costmap update
-            if self.ogm.update:
+            # if the OGM received either a full or partial costmap update
+            if self._ogm.update:
 
                 # reset OGM update flag
-                self.ogm.update = False
+                self._ogm.update = False
 
                 # get new contours of things in our FOV
                 # if self.source_type == 'heightmap':
                 new_contours = self.get_grid_contours()
 
                 # convert points in new_contours to "real" X,Y coords in meters
-                self.contours = self.get_frame_coords(new_contours)
+                self._contours = self.get_frame_coords(new_contours)
 
-                if self.publish:
+                if self._publish:
 
-                    for contour in self.contours:
+                    for contour in self._contours:
                         msg = self.contour_to_contour_msg(contour)
                         contour_pub.publish(msg)
 
@@ -150,17 +151,17 @@ class CostmapProcessor(threading.Thread):
 
         ''' prints basic info about the costmap messages being recieved by the OGM '''
 
-        print('costmap topic: {0}'.format(self.ogm.topic))
+        print('costmap topic: {0}'.format(self._ogm.topic))
 
         # Now you can do basic operations
-        print('Resolution: {0}'.format(self.ogm.resolution))
+        print('Resolution: {0}'.format(self._ogm.resolution))
         # Note that OccupancyGrid data starts on lower left corner (if seen as an image)
         # width / X is from left to right
         # height / Y is from bottom to top
-        print('width: {0}'.format(self.ogm.width))
-        print('height: {0}'.format(self.ogm.height))
-        print('origin: \n{0}'.format(self.ogm.origin))  # geometry_msgs/Pose
-        print('reference_frame: {0}'.format(self.ogm.reference_frame))  # frame_id of this OccupancyGrid
+        print('width: {0}'.format(self._ogm.width))
+        print('height: {0}'.format(self._ogm.height))
+        print('origin: \n{0}'.format(self._ogm.origin))  # geometry_msgs/Pose
+        print('reference_frame: {0}'.format(self._ogm.reference_frame))  # frame_id of this OccupancyGrid
 
         print('----------------------')
 
@@ -169,7 +170,7 @@ class CostmapProcessor(threading.Thread):
         ''' extracts image contours from grid_data in OGM, then convert to list of Contour objects '''
 
         # convert negative values (-1 == UNKNOWN) to zero
-        pos_grid = np.where(self.ogm._grid_data == -1, 0, self.ogm._grid_data)
+        pos_grid = np.where(self._ogm.grid_data == -1, 0, self._ogm.grid_data)
 
         # generate greyscale grid image by scaling from (0,100) to (0,255)
         grid_img = np.array(pos_grid * 2.55).astype('uint8')
@@ -242,7 +243,7 @@ class CostmapProcessor(threading.Thread):
                 # create Contour object and add it to list of contours (to be returned)
                 contour = Contour(label=region, center=(cX, cY), points=cnt_points)
                 contour.label = region
-                contour.pose_rel_to_base = self.ogm.get_world_x_y(contour.center.x, contour.center.y)
+                contour.pose_rel_to_base = self._ogm.get_world_x_y(contour.center[0], contour.center[1])
                 contours.append(contour)
 
             # plt.subplot(131),plt.imshow(grid_img,cmap = 'gray')
@@ -268,7 +269,7 @@ class CostmapProcessor(threading.Thread):
 
         # fill header fields
         msg.contour.header.stamp = rospy.Time.now()
-        msg.contour.header.frame_id = self.ogm.reference_frame
+        msg.contour.header.frame_id = self._ogm.reference_frame
 
         # add points in the contour to message contour.polygon.points
         for idx in range(0, len(contour.points)-1):
@@ -284,7 +285,7 @@ class CostmapProcessor(threading.Thread):
         # fill the pose
         msg.pose.position.x = contour.pose_rel_to_base[0]
         msg.pose.position.y = contour.pose_rel_to_base[1]
-        msg.pose.position.z = 0 # no contours in the air
+        msg.pose.position.z = 0 # no contours in the air, man
 
         # don't really care about this
         msg.pose.orientation.x = 0
@@ -295,8 +296,9 @@ class CostmapProcessor(threading.Thread):
         # label the contour
         msg.label.data = contour.label
 
-        return msg
+        msg.metadata = self._ogm.metadata
 
+        return msg
 
     def contour_to_points(self, contour):
 
@@ -328,14 +330,14 @@ class CostmapProcessor(threading.Thread):
             # convert each point in the contour to a point in the world/reference frame
             for point in contour.points:
 
-                world_point = self.ogm.get_world_x_y(point[0], point[1])
+                world_point = self._ogm.get_world_x_y(point[0], point[1])
                 point[0], point[1] = world_point
 
         return contours
 
 def configure_params():
 
-    ''' configure OccupancyGridManagers from loaded YAML config files
+    ''' configure OccupancyGridManagers from loaded YAML config file
         returns list of configured OGMs and list of types (if YAML exists)
         else, returns None
     '''
