@@ -30,11 +30,11 @@ class Costmap(object):
 
         self._center_pixel = ((self._width/2), (self._height/2))    # (X, Y)
 
-        # if not given an origin, assume we're at (0,0)
+        # if not given an origin, assume we're centered at (0,0)
         if origin is None:
             og = Pose()
-            og.position.x = 0
-            og.position.y = 0
+            og.position.x = - (self._width * self._resolution) / 2
+            og.position.y = - (self._height * self._resolution) / 2
             og.position.z = 0
 
             og.orientation.x = 0
@@ -44,6 +44,10 @@ class Costmap(object):
 
             self._origin = og
         elif origin is not None:
+
+            if not isinstance(origin, Pose):
+                raise TypeError("origin must be a Pose message, received {}".format(type(origin)))
+
             self._origin = origin
 
         # costmap begins as 2darray of zeros; row (height) major
@@ -249,6 +253,10 @@ class Costmap(object):
 
         return msg
 
+    def is_in_map(self, x, y):
+
+        return (-1 < x < self._width) and (-1 < y < self._height)
+
 class CostmapGenerator(object):
 
     def __init__(self, publish=True, rolling_window=False):
@@ -267,7 +275,7 @@ class CostmapGenerator(object):
         # does the generated costmap need to have the same properties as the contour source?
         height = 101    # y
         width = 100     # x
-        resolution = 0.05   # meters per pixel/cell
+        resolution = 0.1   # meters per pixel/cell
 
         self._costmap = Costmap(width, height, resolution)
 
@@ -322,16 +330,20 @@ class CostmapGenerator(object):
 
         self._ready = True
 
-    def pose_callback(self, msg):
+    # can't use this until I figure out the rest of the rolling window shit
+    def center_on_pose_callback(self, msg):
 
-        self._costmap.origin = msg.pose.pose
+        self._costmap.origin.position.x = msg.pose.pose.position.x - (self._costmap.width / 2)
+        self._costmap.origin.position.y = msg.pose.pose.position.y - (self._costmap.height / 2)
+
+        # self._costmap.origin = msg.pose.pose
 
 def ctrl_c_handler(sig, frame):
     sys.exit(0)
 
 if __name__ == '__main__':
 
-    rospy.init_node('costmap_generator', anonymous=True, log_level=rospy.INFO)
+    rospy.init_node('costmap_generator', anonymous=True, log_level=rospy.DEBUG)
 
     signal.signal(signal.SIGINT, ctrl_c_handler)
 

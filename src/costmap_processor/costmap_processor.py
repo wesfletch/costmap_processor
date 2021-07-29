@@ -18,7 +18,6 @@ import cv2 as cv
 from PIL import Image as im
 from matplotlib import pyplot as plt
 
-
 class Contour(object):
 
     def __init__(self, label, center, points, pose_rel_to_base=(0,0)):
@@ -66,10 +65,8 @@ class Contour(object):
         # https://en.wikipedia.org/wiki/Shoelace_formula
         pass
 
-
 def ctrl_c_handler(sig, frame):
     sys.exit(0)
-
 
 class CostmapProcessor(threading.Thread):
 
@@ -128,6 +125,8 @@ class CostmapProcessor(threading.Thread):
 
             # if the OGM received either a full or partial costmap update
             if self._ogm.update:
+
+                rospy.logdebug("received costmap update from {}, processing...".format(self._ogm.topic))
 
                 # reset OGM update flag
                 self._ogm.update = False
@@ -213,7 +212,7 @@ class CostmapProcessor(threading.Thread):
             edges = cv.Canny(blur, minVal, maxVal)
 
             # get contours from region image
-            img, cnts, hierarchy = cv.findContours(edges.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+            img, cnts, hierarchy = cv.findContours(edges.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
 
             color = cv.cvtColor(img, cv.COLOR_GRAY2BGR)
             img2 = cv.drawContours(color, cnts, -1, (0,255,0), 1)
@@ -242,7 +241,7 @@ class CostmapProcessor(threading.Thread):
 
                 # create Contour object and add it to list of contours (to be returned)
                 contour = Contour(label=region, center=(cX, cY), points=cnt_points)
-                contour.label = region
+                contour.label = int(region / 2.55) # scale value back down to range (0,100)
                 contour.pose_rel_to_base = self._ogm.get_world_x_y(contour.center[0], contour.center[1])
                 contours.append(contour)
 
