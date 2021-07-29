@@ -16,7 +16,7 @@ class CostmapTest(unittest.TestCase):
 
     def setUp(self):
 
-        rospy.init_node("test_costmap", anonymous=True)
+        rospy.init_node("test_costmap", anonymous=True, log_level=rospy.DEBUG)
         
         self.height = 100
         self.width = 100
@@ -31,11 +31,11 @@ class CostmapTest(unittest.TestCase):
         self.assertEqual(self.costy.width, self.width)
         self.assertEqual(self.costy.resolution, self.resolution)
 
+        # make sure our origin is a Pose
         self.assertIsInstance(self.costy.origin, Pose)
 
     def test_world_point_to_costmap_point(self):
 
-        # the origin should be pixel (0,0)
         x = self.costy.origin.position.x
         y = self.costy.origin.position.y
 
@@ -44,14 +44,18 @@ class CostmapTest(unittest.TestCase):
         self.assertEqual((costmap_x, costmap_y), (0,0))
 
         # check that it calculates edges properly
-        x_edge = self.costy.resolution * self.costy.width # meters
-        y_edge = self.costy.resolution * self.costy.height # meters
+        x_edge = self.costy.resolution * (self.costy.width / 2)  # meters
+        y_edge = self.costy.resolution * (self.costy.height / 2)  # meters
 
         costmap_x, costmap_y = self.costy.world_point_to_costmap_point(x_edge, y_edge)
 
         self.assertEqual((costmap_x, costmap_y), (self.costy.width, self.costy.height))
 
-        # check negative values
+        # check negative edges
+        costmap_x, costmap_y = self.costy.world_point_to_costmap_point(-1 * x_edge, -1 * y_edge)
+
+        self.assertEqual((costmap_x, costmap_y), (0, 0))
+
 
     def test_costmap_point_to_world_point(self):
 
@@ -72,7 +76,6 @@ class CostmapTest(unittest.TestCase):
         self.assertEqual((world_x, world_y), (costmap_x, costmap_y))
 
         # check negative values
-
 
     def test_mark(self):
 
