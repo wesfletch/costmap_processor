@@ -39,6 +39,6 @@ A node capable of sending/receiving JSON-serialized ROS messages, used as half o
 Future Work:
 
 * Initially, a custom protocol was developed for this communication before being abandoned for simple "HERE'S THE WHOLE MESSAGE AT ONCE." However, Python seems to struggle with receiving large messages all at once as JSON, so it may be necessary to go back to a protocol that at least warns Python-side of the number of bytes it's about to receive.
-* Currently, BridgeServer only supports connection at a time. Since the plan is to have multiple TraCR agents running simultaneously, it would likely be best to make multiple connections possible. Or maybe just use multiple BridgeServer nodes. I don't have all the answers.
+* Currently, BridgeServer only supports one connection at a time. Since the plan is to have multiple TraCR agents running simultaneously, it would likely be best to make multiple connections possible. Or maybe just use multiple BridgeServer nodes. I don't have all the answers.
 * This socket connection needs a thorough Wireshark-ing under load. Need more information on the reliability of the connection.
 
