@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-''' sends dummy Contour messages, so that I don't have to spin up the whole autonomy stack'''
+''' sends dummy Contour messages filled with random info, so that I don't have to spin up the whole autonomy stack to test the ROSBridge Java code '''
 
 # system imports
 import random

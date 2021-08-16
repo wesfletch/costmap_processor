@@ -182,7 +182,7 @@ class CostmapProcessor(threading.Thread):
 
     def get_2d_features(self, grid_data=None):
 
-        ''' in a 2d grid, we don't need to do any complicated processing
+        ''' in a 2d grid, we don't need to do any image quantizing
             we just pull out any cells marked lethal and send them as a contour '''
 
         contours = []       # returned
@@ -261,6 +261,8 @@ class CostmapProcessor(threading.Thread):
         #                           50  55   60   70   80  90
 
         # quantize grid_img based on height "buckets"
+        # basically, uses np's set functions to grab any values between heights[idx] < data < heights[idx+1]
+        # then sets those values to heights[idx] (rounding them down)
         # TODO: find/evaulate alternatives to this (expensive, butt-ugly) technique
         for idx in range(0, len(heights)-1):
             grid_img = np.where(np.logical_and(grid_img >= heights[idx], grid_img < heights[idx+1]),
@@ -464,6 +466,7 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGINT, ctrl_c_handler)
 
+    # get list of OccupancyGridManagers and 
     managers, source_types = configure_params()
 
     threads = []

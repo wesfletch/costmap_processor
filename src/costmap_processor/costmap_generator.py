@@ -23,6 +23,7 @@ from matplotlib import pyplot as plt
 
 from costmap_processor_impl import *
 
+# TODO: write subscriber callback that gets a costmap message so that this object can be used to "track" a message
 class Costmap(object):
 
     def __init__(self, width, height, resolution, origin=None):
@@ -194,11 +195,6 @@ class Costmap(object):
             Input: list of tuple points (in meters) to be marked '''
 
         for point in points:
-
-            # for item in point:
-            #     if not isinstance(item, float):
-            #         rospy.logwarn("mark() received {}, which is not a float tuple. Are you sure this coordinate is in meters?"
-            #             .format(point))
 
             # TODO: should turn this into a public-private interface type deal instead of this type-checking garbage
             if isinstance(point, tuple):
