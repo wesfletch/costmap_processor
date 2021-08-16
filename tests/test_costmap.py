@@ -1,14 +1,18 @@
 #!/usr/bin/env python
 
+''' test suite for the Costmap object and it's functions '''
+
 # system imports
 import unittest
+import random
 
 # ROS imports
 import rospy
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, MapMetaData
 from geometry_msgs.msg import Pose
 from costmap_processor import Costmap
 
+# general imports
 import numpy as np
 
 
@@ -107,6 +111,27 @@ class CostmapTest(unittest.TestCase):
 
         self.assertListEqual(points, occupied)
 
+        # test the very edges of the Costmap
+        point = self.costy.costmap_point_to_world_point(self.width-1, self.height-1)
+        self.costy.mark([point], 100)
+
+        occupied = self.costy.get_occupied()
+        points.append(point)
+
+        self.assertListEqual(points, occupied)
+
+    def test_get_cell_cost(self):
+
+        points = [(0.0,0.0), (1.0, 0.0), (0.0,1.0), (1.0,1.0)]
+
+        self.costy.mark(points, 100)
+
+        occupied = self.costy.get_occupied()
+
+        for point in occupied:
+            costmap_point = self.costy.world_point_to_costmap_point(point[0], point[1])
+            self.assertEqual(100, self.costy.get_cell_cost(costmap_point[0], costmap_point[1]))
+
     def test_costmap_to_occ_grid_msg(self):
 
         msg = self.costy.costmap_to_occ_grid_msg()
@@ -119,85 +144,131 @@ class CostmapTest(unittest.TestCase):
         # with length (height * width)
         zeros = np.zeros(self.costy.height * self.costy.width, dtype="uint8")
 
-        # test for array equality
+        # test for array equality using np's testing module
         self.assertIsNone(np.testing.assert_array_equal(msg.data, zeros))
+
+    def test_expand(self):
+
+        ''' Tests the expand functionality '''
+
+        # ensure that no expansion doesn't change the dimensions
+        self.costy.expand(delta_width=0,delta_height=0)
+        self.assertTupleEqual((self.costy.width, self.costy.height),(self.width, self.height))
+        origin_x = self.costy.origin.position.x
+
+        # test positive (right of zero) width expansion
+        self.costy.expand(delta_width=50, delta_height=0)
+        # width dimension should have increased by 50
+        self.assertTupleEqual((self.costy.width, self.costy.height), (self.width+50, self.height))
+        # origin shouldn't have moved since we expanded to the right
+        self.assertEqual(origin_x, self.costy.origin.position.x)
+        origin_x = self.costy.origin.position.x
+
+        # test negative (left of zero) width expansion
+        self.costy.expand(delta_width=-50, delta_height=0)
+        # test dimensions - costmap has dimension w=200, h=100 (np.shape(100,200))
+        self.assertTupleEqual((self.costy.width, self.costy.height), (self.width+100, self.height))
+        # test origin update - origin should have moved 50 pixels to the left
+        neg_origin = origin_x + (-50 * self.resolution)
+        self.assertEqual(neg_origin, self.costy.origin.position.x)
+
+        # origin_x, origin_y = (self.costy.origin.position.x, self.costy.origin.position.y)
+
+        # reset the Costmap
+        self.costy = Costmap(self.width, self.height, self.resolution, origin=None)
+
+        # test whether costmap expansion maintains point positions
+        # get costmap (0,0) and mark it
+        zero_x, zero_y = self.costy.costmap_point_to_world_point(self.width/2, self.height/2)
+        self.costy.mark({(zero_x,zero_y)}, 100) # (0.0, 0.0) meters
+        # expand the costmap
+        self.costy.expand(delta_width=-10, delta_height=0)
+        # recalculate the position of the point
+        zero_x, zero_y = self.costy.world_point_to_costmap_point(0.0, 0.0)
+        # the point should be in the same place (in meters) as before
+        # when accessed directly as in data[y][x], costmap data is [height][width]
+        # however, using get_cell_cost() returns [width][height]
+        self.assertEqual(100, self.costy.data[zero_y][zero_x])  
+
+    def test_create_from_metadata(self):
+
+        meta = MapMetaData()
+        meta.resolution = self.resolution
+        meta.height = self.height
+        meta.width = self.width
+        meta.origin = None
+
+        new_costy = Costmap.create_from_metadata(meta)
+
+        self.assertEquals(self.costy.resolution, new_costy.resolution)
+        self.assertEquals(self.costy.height, new_costy.height)
+        self.assertEquals(self.costy.width, new_costy.width)
+        self.assertEquals(self.costy.origin, new_costy.origin)
+
+    def test_data_setter(self):
+
+        new_data = np.zeros((150, 150))
+        # self.costy.width = 150
+        # self.costy.height = 150
+        
+        # ensure that arrays with the incorrect number of elements cannot replace data
+        # i.e. if dimensions of Costmap are (100, 100), setting data with array dimensions (150, 150) should fail
+        # this SHOULD throw a rospy error, don't let the red text scare you
+        self.costy.data = new_data
+        self.assertFalse(np.array_equal(self.costy.data, new_data))
+
+        # after adjusting the dimensions of Costmap to match new_data, setting the data should work
+        self.costy.width = 150
+        self.costy.height = 150
+        self.costy.data = new_data
+        self.assertIsNone(np.testing.assert_array_equal(self.costy.data, new_data))
+
+        # make sure that it's actually keeping all of the data we set using a bunch of random points
+        points = []
+        # values = []
+
+        for i in range(100):
+            # select random point in new_data...
+            x = random.randint(0, new_data.shape[1]-1)
+            y = random.randint(0, new_data.shape[0]-1)
+
+            # then set it to random value
+            value = random.randint(1, 100)
+            
+            # and mark it in new_data
+            new_data[y][x] = value
+
+            # save it to check later
+            points.append((x, y))
+            # values.append(value)
+        
+        # set the costmap data to include our random points
+        self.costy.data = new_data
+        occupied = self.costy.get_occupied()    # <-- should only contain random points from above
+
+        world_points = []
+        # get world-frame values of the points we set
+        for i in range(100):
+            x, y = self.costy.costmap_point_to_world_point(points[i][0], points[i][1])
+            world_points.append((x,y))
+
+        # sort the lists by x value
+        world_points.sort(key=lambda tup: tup[0])
+        occupied.sort(key=lambda tup: tup[0])
+
+        # make sure all x values are the same
+        for i in range(100):
+            self.assertEqual(world_points[i][0], occupied[i][0])
+
+        # sort by y value
+        world_points.sort(key=lambda tup: tup[1])
+        occupied.sort(key=lambda tup: tup[1])
+
+        # make sure all y values are the same
+        for i in range(100):
+            self.assertEqual(world_points[i][1], occupied[i][1])
+
 
 if __name__ == '__main__':
 
     unittest.main()
-
-    # rospy.init_node('geometry_test', anonymous=True)
-    # ocg_pub = rospy.Publisher('ocg', OccupancyGrid, queue_size=10)
-
-    # height = 100        # y-axis
-    # width = 100         # x-axis
-    # resolution = 0.05
-
-    # costy = Costmap(width, height, resolution)
-
-    # points = [(0.0,0.0), (1.0, 0.0), (0.0,1.0), (1.0,1.0)]
-
-    # # marks corners of 1m square with bottom-left at the origin
-    # for point in points:
-    #     costy.mark(point, 100)
-
-    # occupied = costy.get_occupied()
-
-    # assert occupied == points, ""
-
-    # rospy.loginfo(costy.get_occupied())
-
-    # # edges of the map
-    # x_edge = width * resolution     # meters
-    # y_edge = height * resolution    # meters
-    # costy.mark([(x_edge, 0)], 100)
-    # costy.mark([(0, y_edge)], 100)
-
-    # print(costy.get_occupied())
-
-    # # costy.clear()
-
-    # # # just past the edges of the map (force positive resize)
-    # # costy.mark([(x_edge + .05, 0)], 100)
-    # # costy.mark([(0, y_edge + .05)], 100)
-
-    # # costy.clear()
-
-    # # # negative points
-    # costy.mark([(-1, 0)], 100)
-    # costy.mark([(0, -1)], 100)
-
-    # costy.mark([(0.5, -1)], 50)
-    # costy.mark([(-5, -5)], 50)
-
-    # print(costy.get_occupied())
-
-    # # og = Pose()
-    # # og.position.x = - (costy.width / 2) * resolution
-    # # og.position.y = - (costy.height / 2) * resolution
-    # # og.position.z = 0
-
-    # # og.orientation.x = 0
-    # # og.orientation.y = 0
-    # # og.orientation.z = 0
-    # # og.orientation.w = 1
-
-    # # costy.origin = og
-
-    # # # costy.clear()
-
-    # # # costy.mark([(-1, -1)], 100)
-    # # # costy.mark([(0,0)], 100)
-
-    # # print(costy.get_occupied())
-
-    # msg = costy.costmap_to_occ_grid_msg()
-
-    # # rate = rospy.Rate(1)    # Hz
-
-    # # while not rospy.is_shutdown():
-
-    # #     ocg_pub.publish(msg)
-        
-    # #     rate.sleep()
-

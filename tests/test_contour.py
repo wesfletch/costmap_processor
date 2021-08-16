@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+''' set of tests for the Contour class (obviously not comprehensive) '''
+
 # system imports
 import unittest
 

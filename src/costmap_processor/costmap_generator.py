@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 
+''' Costmap: Python implementation of a Costmap object that supports conversion to nav_msgs/OccupancyGrid messages
+    CostmapGenerator: creates/publishes a costmap based on received Contours using the Costmap object '''
+
 # system imports
 import signal
 import sys
@@ -56,13 +59,46 @@ class Costmap(object):
         # default to "map"
         self._frame = "map"
 
+    @classmethod
+    def create_from_metadata(cls, metadata):
+
+        ''' creates and returns a Costmap object based on a MapMetaData message
+            all data will be 0.0 '''
+
+        if not isinstance(metadata, MapMetaData):
+            rospy.logerr("Given arg metadata must be of type nav_msgs/MapMetaData")
+            return None
+
+        # call the Costmap constructor
+        return cls( width=metadata.width, 
+                    height=metadata.height, 
+                    resolution=metadata.resolution,
+                    origin=metadata.origin)
+
+    # @classmethod
+    # def create_from_occ_grid(cls, ocg):
+
+    #     ''' creates and returns a Costmap object based on a nav_msgs/OccupancyGrid message '''
+
+    #     if not isinstance(ocg, OccupancyGrid):
+    #         rospy.logerr("Given arg metadata must be of type nav_msgs/OccupancyGrid")
+    #         return None
+
     @property
     def width(self):
         return self._width
 
+    @width.setter
+    def width(self, new_width):
+        self._width = new_width
+
     @property
     def height(self):
         return self._height
+
+    @height.setter
+    def height(self, new_height):
+        self._height = new_height
 
     @property
     def resolution(self):
@@ -79,6 +115,19 @@ class Costmap(object):
     @property
     def data(self):
         return self._data
+
+    @data.setter
+    def data(self, new_data):
+
+        ''' must fit in Costmap dimensions (height, width) '''
+
+        try:
+            # convert new_data to 2D array, then replace old data
+            new_data = np.reshape(new_data, (self._height, self._width))
+            self._data = new_data
+        except Exception as e:
+            rospy.logerr("Can't reshape. Do the dimensions of this data match the dimensions of the Costmap object?")
+            print(e)
 
     @property
     def frame(self):
@@ -141,7 +190,15 @@ class Costmap(object):
             
     def mark(self, points, value):
 
+        ''' Marks costmap points with provided <value>, assumes points are in meters
+            Input: list of tuple points (in meters) to be marked '''
+
         for point in points:
+
+            # for item in point:
+            #     if not isinstance(item, float):
+            #         rospy.logwarn("mark() received {}, which is not a float tuple. Are you sure this coordinate is in meters?"
+            #             .format(point))
 
             # TODO: should turn this into a public-private interface type deal instead of this type-checking garbage
             if isinstance(point, tuple):
@@ -152,7 +209,7 @@ class Costmap(object):
                 rospy.logerr('incorrect point type {}... skipping'.format(type(point)))
                 continue
             
-            # rospy.loginfo("x: {}, y: {}  (pixels)".format(x, y))
+            # rospy.loginfo("x: {}, y: {} (pixels)".format(x, y))
 
             delta_x = 0
             delta_y = 0
@@ -187,6 +244,7 @@ class Costmap(object):
 
     def clear(self):
 
+        rospy.logwarn("clearing costmap")
         self._data.fill(0)
 
     def world_point_to_costmap_point(self, x, y):
@@ -216,14 +274,16 @@ class Costmap(object):
 
         points = []
 
-        for y in range(0, self._height -1):
-            for x in range(0, self._width - 1):
+        for y in range(0, self._height):
+            for x in range(0, self._width):
                 if self._data[y][x] != 0:
                     points.append(self.costmap_point_to_world_point(x, y))
 
         return points
 
     def get_cell_cost(self, x, y):
+
+        ''' returns cost of cell (pixel coords) '''
 
         return self._data[y][x]
 
@@ -259,17 +319,22 @@ class Costmap(object):
 
 class CostmapGenerator(object):
 
-    def __init__(self, publish=True, rolling_window=False):
+    def __init__(self, publish=True, topic=None):
         
-        self.cnt_subscriber = rospy.Subscriber("/costmap_processor/slope_grid", ContourMsg, self.cnt_callback)
-        self.other_subscriber = rospy.Subscriber("/costmap_processor/costmap", ContourMsg, self.cnt_callback)
+        # self.cnt_subscriber = rospy.Subscriber("/costmap_processor/slope_grid", ContourMsg, self.cnt_callback)
+        # self.other_subscriber = rospy.Subscriber("/costmap_processor/costmap", ContourMsg, self.cnt_callback)
         
         # if rolling_window is configured, subscribe to pose (so we can set costmap center-point later)
-        if rolling_window:
-            self.pose_subscriber = rospy.Subscriber("/pose", PoseWithCovarianceStamped, self.pose_callback)
+        # if rolling_window:
+        #     self.pose_subscriber = rospy.Subscriber("/pose", PoseWithCovarianceStamped, self.pose_callback)
 
-        self._costmap_pub = rospy.Publisher('costmap_generator', OccupancyGrid, queue_size=10)
-        self._publish = publish
+        if publish:
+            if topic is None:
+                self._costmap_pub = rospy.Publisher('costmap_generator', OccupancyGrid, queue_size=10)
+            else:
+                self._costmap_pub = rospy.Publisher(topic, OccupancyGrid, queue_size=10)
+
+            self._publish = publish
 
         # TODO: need to get these dynamically (from a MapMetaData message?)
         # does the generated costmap need to have the same properties as the contour source?
@@ -297,6 +362,17 @@ class CostmapGenerator(object):
     def ready(self):
         return self._ready
 
+    def subscribe(self, topic, message_type, cb=None):
+        
+        if cb is None:
+            cb = self.cnt_callback
+
+        rospy.Subscriber(topic, message_type, callback=cb)
+
+    def timer_clear(self, event):
+
+        self.costmap.clear()
+
     def run(self):
         
         ''' main loop of node '''
@@ -304,7 +380,13 @@ class CostmapGenerator(object):
         # TODO: needs to be param-ed
         rate = rospy.Rate(1)    # Hz
 
+        # rospy.Timer(rospy.Duration(5.0), self.timer_clear)
+
         while not rospy.is_shutdown():
+
+            # if (rospy.Time.now() - last_cleared) >= rospy.Duration(2.0):
+            #     self._costmap.clear()
+            #     last_cleared = rospy.Time.now()
 
             if self.publish:
 
@@ -313,7 +395,7 @@ class CostmapGenerator(object):
                     # create costmap message from data in Costmap object
                     msg = self._costmap.costmap_to_occ_grid_msg()
                     self._costmap_pub.publish(msg)
-                
+    
             rate.sleep()
 
     def cnt_callback(self, contour):
@@ -322,10 +404,10 @@ class CostmapGenerator(object):
 
         self._ready = False
 
-        # TODO: should I just create a VALUE field in the contour message?
         contour_label = contour.label.data
+        rospy.logdebug("received value: {}".format(contour_label))
 
-        self._costmap.mark(points=contour.contour.polygon.points, 
+        self._costmap.mark( points=contour.contour.polygon.points, 
                             value=contour.label.data) 
 
         self._ready = True
@@ -341,11 +423,65 @@ class CostmapGenerator(object):
 def ctrl_c_handler(sig, frame):
     sys.exit(0)
 
+def configure_params():
+
+    ''' configure TRaKR parameters based on loaded configuration file (if there is one)
+        returns list of configured CostmapGenerator objects '''
+
+    if rospy.has_param('~costmap_generator/outputs'):
+
+        generators = []
+
+        outputs = rospy.get_param('~costmap_generator/outputs').split()
+        print(outputs)
+
+        for output in outputs:
+
+            prefix = str('~costmap_generator/' + output)
+
+            if rospy.has_param(prefix + "/output_topic_name"):
+                output_topic_name = rospy.get_param(prefix + "/output_topic_name")
+            else:
+                output_topic_name = output
+
+            print(output_topic_name)
+            cg = CostmapGenerator(publish=True, topic=output_topic_name)
+
+            subscriptions = rospy.get_param(prefix + "/subscriptions").split()
+            print(subscriptions)
+
+            for subscription in subscriptions:
+
+                print(subscription)
+                topic = rospy.get_param(prefix + "/subscriptions/" + subscription + "/topic", default="/decisions")
+                cg.subscribe(topic, ContourMsg)
+
+            generators.append(cg)
+    else:
+        rospy.logwarn("No 'costmap_generator/outputs' parameter loaded. costmap_generator(s) will NOT be configured.")
+        return None
+
+
 if __name__ == '__main__':
 
     rospy.init_node('costmap_generator', anonymous=True, log_level=rospy.DEBUG)
 
-    signal.signal(signal.SIGINT, ctrl_c_handler)
+    generators = configure_params()
 
-    costy = CostmapGenerator(publish=True)
-    costy.run()
+    if generators is not None:
+
+        threads = []
+        for generator in generators:
+            th = threading.Thread(target=generator.run)
+            threads.append(th)
+            th.start()
+
+        rospy.spin()
+
+        for thread in threads:
+            thread.joing()
+    else:
+        cg = CostmapGenerator(True, "/trakr/map")
+        cg.subscribe("/decisions", ContourMsg)
+
+        cg.run()

@@ -1,15 +1,20 @@
 #!/usr/bin/env python
 
+''' Contour: Python object that represents a costmap_processor/Contour message
+    CostmapProcessor: uses OpenCV for image segmentation on costmaps, generating then publishing contours '''
+
 # system imports
 import signal
 import sys
 import threading
+import math
 
 # ros imports
 import rospy
 from occupancy_grid_python import OccupancyGridManager
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point32
+
 from costmap_processor.msg import Contour as ContourMsg
 
 # image processing imports
@@ -22,6 +27,7 @@ class Contour(object):
 
     def __init__(self, label, center, points, pose_rel_to_base=(0,0)):
         self._label = str(label)
+        self._source = None
         self._center = center
         self._points = points
         self._pose_rel_to_base = pose_rel_to_base
@@ -56,6 +62,14 @@ class Contour(object):
     @pose_rel_to_base.setter
     def pose_rel_to_base(self, new_pose):
         self._pose_rel_to_base = new_pose
+
+    @property
+    def source(self):
+        return self._source
+
+    @source.setter
+    def source(self, new_source):
+        self._source = new_source
 
     def translate_to_msg(self):
         pass
@@ -132,8 +146,10 @@ class CostmapProcessor(threading.Thread):
                 self._ogm.update = False
 
                 # get new contours of things in our FOV
-                # if self.source_type == 'heightmap':
-                new_contours = self.get_grid_contours()
+                if self.source_type == '2d':
+                    new_contours = self.get_2d_features(None)
+                else:
+                    new_contours = self.get_grid_contours(None)
 
                 # convert points in new_contours to "real" X,Y coords in meters
                 self._contours = self.get_frame_coords(new_contours)
@@ -164,18 +180,85 @@ class CostmapProcessor(threading.Thread):
 
         print('----------------------')
 
-    def get_grid_contours(self):
+    def get_2d_features(self, grid_data=None):
+
+        ''' in a 2d grid, we don't need to do any complicated processing
+            we just pull out any cells marked lethal and send them as a contour '''
+
+        contours = []       # returned
+
+        if grid_data is None:
+            # convert negative values (-1 == UNKNOWN) to zero
+            pos_grid = np.where(self._ogm.grid_data == -1, 0, self._ogm.grid_data)
+        else:
+            pos_grid = np.where(grid_data == -1, 0, grid_data)
+
+        # generate greyscale grid image by scaling from (0,100) to (0,255)
+        grid_img = np.array(pos_grid * 2.55).astype('uint8')
+
+        # Gaussian Blur to de-noise
+        blur = cv.GaussianBlur(grid_img, (5,5), 0)
+    
+        # statistical approach to canny parameters from: 
+        # https://www.pyimagesearch.com/2015/04/06/zero-parameter-automatic-canny-edge-detection-with-python-and-opencv/
+        sigma = .50
+        v = np.median(grid_img)
+        minVal = int(max(0, (1.0 - sigma) * v))
+        maxVal = int(min(255, (1.0 + sigma) * v))
+
+        # Canny edge detection
+        edges = cv.Canny(blur, minVal, maxVal)
+
+        # get contours from region image
+        img, cnts, hierarchy = cv.findContours(edges.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
+
+        color = cv.cvtColor(img, cv.COLOR_GRAY2BGR)
+        img2 = cv.drawContours(color, cnts, -1, (0,255,0), 1)
+
+        # find centers of each contour, get physical location of the centers
+        print("# of cnts: {}".format(len(cnts)))
+        for cnt in cnts:
+
+            # use moments to get center of contour
+            M = cv.moments(cnt)
+            if M["m00"] != 0:       # avoid DivideByZero
+                cX = int(M["m10"] / M["m00"])
+                cY = int(M["m01"] / M["m00"])
+            else:
+                continue
+
+            # convert to list of tuple points (x,y)
+            cnt_points = self.contour_to_points(cnt)
+
+            # create Contour object and add it to list of contours (to be returned)
+            contour = Contour(label=100, center=(cX, cY), points=cnt_points)
+            contour.label = 100 # scale value back down to range (0,100), ensure we round up
+            # print("region: {}".format(region))
+            print("contour: {}".format(contour.label))
+            contour.source = self.source_type
+            contour.pose_rel_to_base = self._ogm.get_world_x_y(contour.center[0], contour.center[1])
+            contours.append(contour)
+        
+        return contours
+
+
+    def get_grid_contours(self, grid_data):
         
         ''' extracts image contours from grid_data in OGM, then convert to list of Contour objects '''
 
         # convert negative values (-1 == UNKNOWN) to zero
-        pos_grid = np.where(self._ogm.grid_data == -1, 0, self._ogm.grid_data)
+        if grid_data is None:
+            pos_grid = np.where(self._ogm.grid_data == -1, 0, self._ogm.grid_data)
+        else:
+            pos_grid = np.where(grid_data == -1, 0, grid_data)
 
         # generate greyscale grid image by scaling from (0,100) to (0,255)
         grid_img = np.array(pos_grid * 2.55).astype('uint8')
 
         # height "buckets" to quantize the image
-        heights = [0, 25, 50, 100, 125, 150, 200, 250]
+        # heights = [0, 25, 50, 100, 125, 150, 200, 250]
+        heights = [0, 25, 50, 100, 127, 140, 153, 178, 204, 229, 250]
+        #                           50  55   60   70   80  90
 
         # quantize grid_img based on height "buckets"
         # TODO: find/evaulate alternatives to this (expensive, butt-ugly) technique
@@ -188,7 +271,7 @@ class CostmapProcessor(threading.Thread):
 
         # get (sorted) list of unique values, will contain a value for each height "region" in the image
         regions = np.unique(grid_img)
-        
+
         # create separate image for each height bucket
         # use (now) binary image to determine contours in each 
         for region in regions:
@@ -218,6 +301,7 @@ class CostmapProcessor(threading.Thread):
             img2 = cv.drawContours(color, cnts, -1, (0,255,0), 1)
 
             # find centers of each contour, get physical location of the centers
+            # print("# of cnts: {}".format(len(cnts)))
             for cnt in cnts:
 
                 # use moments to get center of contour
@@ -228,36 +312,26 @@ class CostmapProcessor(threading.Thread):
                 else:
                     continue
 
-                # # draw the center of the contour
-                # cv.circle(img2, (cX, cY), 1, (0, 0, 255), -1)
-
-                # rect = cv.minAreaRect(cnt)
-                # box = cv.boxPoints(rect)
-                # box = np.int0(box)  # ???
-                # cv.drawContours(img2,[box],0,(0,0,255),2)
-
                 # convert to list of tuple points (x,y)
                 cnt_points = self.contour_to_points(cnt)
 
                 # create Contour object and add it to list of contours (to be returned)
                 contour = Contour(label=region, center=(cX, cY), points=cnt_points)
-                contour.label = int(region / 2.55) # scale value back down to range (0,100)
+                contour.label = int(math.ceil(region / 2.55)) # scale value back down to range (0,100), ensure we round up
+                contour.source = self.source_type
                 contour.pose_rel_to_base = self._ogm.get_world_x_y(contour.center[0], contour.center[1])
                 contours.append(contour)
 
             # plt.subplot(131),plt.imshow(grid_img,cmap = 'gray')
             # plt.title('Original'), plt.xticks([]), plt.yticks([])
-            # plt.subplot(132),plt.imshow(area,cmap = 'gray')
+            # plt.subplot(132),plt.imshow(region_grid,cmap = 'gray')
             # plt.title('Thresholded'), plt.xticks([]), plt.yticks([])
             # plt.subplot(133),plt.imshow(img2,cmap = 'gray')
             # plt.title('Region: ' + str(region)), plt.xticks([]), plt.yticks([])
 
-            # plt.show()
+            plt.show()
 
-            # TODO: actually implement this function
-            self.remove_duplicates(contours, region_grids)
-
-            return contours
+        return contours
 
     def contour_to_contour_msg(self, contour):
 
@@ -294,6 +368,7 @@ class CostmapProcessor(threading.Thread):
 
         # label the contour
         msg.label.data = contour.label
+        msg.source.data = contour.source
 
         msg.metadata = self._ogm.metadata
 
@@ -330,7 +405,9 @@ class CostmapProcessor(threading.Thread):
             for point in contour.points:
 
                 world_point = self._ogm.get_world_x_y(point[0], point[1])
-                point[0], point[1] = world_point
+                # point[0], point[1] = world_point
+                point[0] = round(world_point[0], 1)
+                point[1] = round(world_point[1], 1)
 
         return contours
 
@@ -383,7 +460,7 @@ def configure_params():
     
 if __name__ == '__main__':
 
-    rospy.init_node('costmap_processor', anonymous=True, log_level=rospy.WARN)
+    rospy.init_node('costmap_processor', anonymous=True, log_level=rospy.DEBUG)
 
     signal.signal(signal.SIGINT, ctrl_c_handler)
 
