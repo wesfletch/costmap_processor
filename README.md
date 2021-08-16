@@ -4,10 +4,10 @@ A set of ROS nodes and basic Python utilities to process the inputs/outputs of a
 
 Required dependencies:
 
-* [occupancy_grid_python](https://github.com/awesomebytes/occupancy_grid_python): used to subscribe to and manipulate OccupancyGrid messages for costmap_processor node. However, most of this functionality (minus the ability to subscribe to a message and update object data automatically) is available in the Costmap object of costmap_processor.
+* [occupancy_grid_python](https://github.com/awesomebytes/occupancy_grid_python): used to subscribe to and manipulate OccupancyGrid messages for costmap_processor node. However, most of this functionality (minus the ability to subscribe to a message and update object data automatically) is available in the Costmap object of costmap_generator.py.
 * [rospy_message_converter](https://github.com/uos/rospy_message_converter): used in the bridge_server node to JSON-serialize ROS messages for transport to Java client ROSBridge.
 
-### Nodes
+## Nodes
 
 This ROS package contains a few different nodes to handle input/output for TraCR agents:
 
@@ -32,10 +32,7 @@ Future work:
 * It might be nice to extend the Costmap object to a [layered costmap](https://ieeexplore.ieee.org/document/6942636). This is standard in ROS as of the Hydro (?) release, and having features on different layers based on type might be one method of providing semantic information to the system for closed-loop (back into TraCR) control.
 
 
-
 ### BridgeServer
-
-<insert picture from powerpoint slides here>
 
 A node capable of sending/receiving JSON-serialized ROS messages, used as half of a socket connection to a Java client using ROSBridge. The BridgeServer gets publish/subscribe requests from the Java-side of the connection, then creates rospy publishers and subscribers to match. Then, messages are passed back and forth via socket connection.
 
